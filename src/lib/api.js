@@ -5,6 +5,8 @@ export function describeApiError(code, detail) {
   switch (code) {
     case "quota":
       return "Free AI quota abhi khatam ho gayi hai. Thori der baad ya kal (quota reset hone par) dobara try karein.";
+    case "busy":
+      return "Is AI model par abhi bohat load hai (free models par aksar hota hai). Thori der baad dobara try karein, ya .env/Vercel mein AI_MODEL doosra free model kar dein.";
     case "auth":
       return (
         "API key sahi nahi ya kaam nahi kar rahi. .env (ya Vercel) mein GEMINI_API_KEY check karein." +
