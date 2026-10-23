@@ -18,7 +18,7 @@ const geminiOk = (obj) => ({ json: { candidates: [{ content: { parts: [{ text: t
 const openaiOk = (obj) => ({ json: { choices: [{ message: { content: typeof obj === "string" ? obj : JSON.stringify(obj) } }] } });
 
 function setEnv(env) {
-  for (const k of ["AI_PROVIDER", "AI_MODEL", "AI_BASE_URL", "GEMINI_API_KEY", "OPENAI_API_KEY"]) delete process.env[k];
+  for (const k of ["AI_PROVIDER", "AI_MODEL", "AI_BASE_URL", "AI_TIMEOUT_SECONDS", "AI_THINKING_LEVEL", "GEMINI_API_KEY", "OPENAI_API_KEY"]) delete process.env[k];
   Object.assign(process.env, env);
 }
 
@@ -166,6 +166,45 @@ await test("health status reports setup problems without exposing the key", asyn
   assert.equal(getAiStatus({ AI_PROVIDER: "gemini", AI_MODEL: "m" }).ok, false);
   assert.equal(getAiStatus({ AI_PROVIDER: "gemini" }).ok, false);
   assert.equal(getAiStatus({ AI_PROVIDER: "nope", AI_MODEL: "m" }).ok, false);
+});
+
+console.log("Diagnostics and tuning");
+await test("timeout error says how long it waited; thinking level and timeout come from env", async () => {
+  setEnv({ ...GEMINI, AI_TIMEOUT_SECONDS: "5", AI_THINKING_LEVEL: "low" });
+  mockFetch(() => geminiOk({ reply: "ok", corrections: [], vocabulary: [] }));
+  await callHandler(chat, { messages: [{ role: "user", text: "hi" }] });
+  assert.deepEqual(calls[0].body.generationConfig.thinkingConfig, { thinkingLevel: "low" });
+  // fetch jo kabhi jawab na de, abort signal par band ho
+  globalThis.fetch = (url, opts) => new Promise((_, reject) => opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))));
+  const t0 = Date.now();
+  const out = await callHandler(chat, { messages: [{ role: "user", text: "hi" }] });
+  assert.equal(out.code, "timeout");
+  assert.match(out.detail, /second/);
+  assert.ok(Date.now() - t0 >= 4900 && Date.now() - t0 < 8000);
+});
+
+await test("no thinking config unless asked", async () => {
+  setEnv(GEMINI);
+  mockFetch(() => geminiOk({ reply: "ok", corrections: [], vocabulary: [] }));
+  await callHandler(chat, { messages: [{ role: "user", text: "hi" }] });
+  assert.equal(calls[0].body.generationConfig.thinkingConfig, undefined);
+});
+
+await test("health probe reports reachability, and never leaks the key", async () => {
+  setEnv(GEMINI);
+  const { default: health } = await import("../api/health.js");
+  async function get(url) { let out; await health({ method: "GET", url }, { status() { return this; }, json(d) { out = d; } }); return out; }
+  globalThis.fetch = async (url, opts) => ({ ok: true, status: 200, json: async () => ({ models: [] }) });
+  const ok = await get("/api/health?probe=1");
+  assert.equal(ok.probe.reachable, true);
+  assert.equal(ok.probe.keyAccepted, true);
+  assert.ok(!JSON.stringify(ok).includes("KEY1"));
+  globalThis.fetch = async () => { throw Object.assign(new Error("fetch failed"), { cause: { code: "ENOTFOUND" } }); };
+  const down = await get("/api/health?probe=1");
+  assert.equal(down.probe.reachable, false);
+  assert.equal(down.probe.detail, "ENOTFOUND");
+  const plain = await get("/api/health");
+  assert.equal(plain.probe, undefined);
 });
 
 globalThis.fetch = realFetch;
