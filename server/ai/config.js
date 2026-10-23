@@ -44,5 +44,11 @@ export function readTuning(env = process.env) {
   const seconds = Number(env.AI_TIMEOUT_SECONDS);
   const timeoutMs = Number.isFinite(seconds) && seconds >= 5 ? Math.min(seconds, 120) * 1000 : LIMITS.timeoutMs;
   const thinkingLevel = (env.AI_THINKING_LEVEL || "").trim().toLowerCase() || undefined;
-  return { timeoutMs, thinkingLevel };
+  // AI_FALLBACK_MODELS=model-b,model-c : pehla model busy/timeout/quota ho to agle FREE models try hote hain
+  const fallbackModels = (env.AI_FALLBACK_MODELS || "")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return { timeoutMs, thinkingLevel, fallbackModels };
 }
