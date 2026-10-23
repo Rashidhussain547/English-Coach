@@ -74,28 +74,42 @@ export async function generateReply({ system, messages, json = false, maxChars }
     throw new AIError("provider", "Aakhri message user ka hona chahiye.");
   }
 
-  const { timeoutMs, thinkingLevel } = readTuning(env);
-  const startedAt = Date.now();
-  try {
-    const result = await adapter.generate({
-      apiKey: config.apiKey,
-      model: config.model,
-      system,
-      messages: prepared,
-      maxOutputTokens: LIMITS.maxOutputTokens,
-      temperature: LIMITS.temperature,
-      timeoutMs,
-      json,
-      thinkingLevel,
-      baseUrl: (env.AI_BASE_URL || "").trim(),
-    });
-    // Vercel ke Runtime Logs mein timing dikhti hai (key kabhi log nahi hoti)
-    console.log(`[ai] ${adapter.name}/${config.model} ok in ${Date.now() - startedAt}ms`);
-    return result;
-  } catch (err) {
-    console.log(`[ai] ${adapter.name}/${config.model} failed (${err.code || err.name}) after ${Date.now() - startedAt}ms: ${err.message}`);
-    throw err;
+  const { timeoutMs, thinkingLevel, fallbackModels } = readTuning(env);
+  // Ye errors aaen to agla (free) model try hota hai. Galat key, block, config wagaira par nahi.
+  const RETRY_WITH_NEXT_MODEL = new Set(["busy", "timeout", "quota", "model"]);
+  const models = [config.model, ...fallbackModels.filter((m) => m !== config.model)];
+  const budgetMs = Math.max(timeoutMs, 45000); // sab models milakar itna hi intezar
+  const t0 = Date.now();
+  let lastError;
+
+  for (let i = 0; i < models.length; i++) {
+    const remaining = budgetMs - (Date.now() - t0);
+    if (i > 0 && remaining < 8000) break; // waqt nahi bacha
+    const model = models[i];
+    const startedAt = Date.now();
+    try {
+      const result = await adapter.generate({
+        apiKey: config.apiKey,
+        model,
+        system,
+        messages: prepared,
+        maxOutputTokens: LIMITS.maxOutputTokens,
+        temperature: LIMITS.temperature,
+        timeoutMs: Math.min(timeoutMs, Math.max(remaining, 5000)),
+        json,
+        thinkingLevel,
+        baseUrl: (env.AI_BASE_URL || "").trim(),
+      });
+      // Vercel ke Runtime Logs mein timing dikhti hai (key kabhi log nahi hoti)
+      console.log(`[ai] ${adapter.name}/${model} ok in ${Date.now() - startedAt}ms`);
+      return { ...result, model };
+    } catch (err) {
+      lastError = err;
+      console.log(`[ai] ${adapter.name}/${model} failed (${err.code || err.name}) after ${Date.now() - startedAt}ms: ${err.message}`);
+      if (!RETRY_WITH_NEXT_MODEL.has(err.code)) throw err;
+    }
   }
+  throw lastError;
 }
 
 // Provider tak connectivity check (agar adapter ping support karta hai)
