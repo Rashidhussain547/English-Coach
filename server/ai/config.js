@@ -38,3 +38,11 @@ export function readAiConfig(env = process.env) {
 
   return { provider, model, apiKey, keyName };
 }
+
+// Optional settings (.env / Vercel): AI_TIMEOUT_SECONDS (5-120) aur AI_THINKING_LEVEL (jaise "low")
+export function readTuning(env = process.env) {
+  const seconds = Number(env.AI_TIMEOUT_SECONDS);
+  const timeoutMs = Number.isFinite(seconds) && seconds >= 5 ? Math.min(seconds, 120) * 1000 : LIMITS.timeoutMs;
+  const thinkingLevel = (env.AI_THINKING_LEVEL || "").trim().toLowerCase() || undefined;
+  return { timeoutMs, thinkingLevel };
+}
