@@ -22,7 +22,7 @@ export const gemini = {
     realtime: false,
   },
 
-  async generate({ apiKey, model, system, messages, maxOutputTokens, temperature, timeoutMs, json }) {
+  async generate({ apiKey, model, system, messages, maxOutputTokens, temperature, timeoutMs, json, thinkingLevel }) {
     const body = {
       contents: messages.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
@@ -32,12 +32,15 @@ export const gemini = {
     };
     // json: true -> Gemini ko sirf JSON text dene ko kehta hai
     if (json) body.generationConfig.responseMimeType = "application/json";
+    // Optional: AI_THINKING_LEVEL=low se jawab tez aata hai (sirf un models par jo ise support karte hain)
+    if (thinkingLevel) body.generationConfig.thinkingConfig = { thinkingLevel };
     if (system) {
       body.system_instruction = { parts: [{ text: system }] };
     }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
 
     let response;
     try {
@@ -53,9 +56,10 @@ export const gemini = {
       });
     } catch (err) {
       if (err.name === "AbortError") {
-        throw new AIError("timeout", "AI ne waqt par jawab nahi diya.");
+        throw new AIError("timeout", `Google se ${Math.round((Date.now() - startedAt) / 1000)} second tak koi jawab nahi aaya.`);
       }
-      throw new AIError("network", "AI service tak pahunch nahi sakay.");
+      const why = err?.cause?.code || err?.cause?.message || err?.message || "unknown";
+      throw new AIError("network", "AI service tak pahunch nahi sakay (" + why + ").");
     } finally {
       clearTimeout(timer);
     }
@@ -83,5 +87,34 @@ export const gemini = {
       throw new AIError("provider", "AI ne khali jawab diya. Dobara try karein.");
     }
     return { text };
+  },
+
+  // Chhota connectivity check (generate se bohat sasta): kya Google tak pahunch sakte hain aur key chalti hai?
+  async ping({ apiKey, timeoutMs }) {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${BASE_URL}/models?pageSize=1`, {
+        headers: { "x-goog-api-key": apiKey },
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({}));
+      return {
+        reachable: true,
+        httpStatus: response.status,
+        keyAccepted: response.ok,
+        ms: Date.now() - startedAt,
+        detail: response.ok ? "" : data?.error?.message || "",
+      };
+    } catch (err) {
+      return {
+        reachable: false,
+        ms: Date.now() - startedAt,
+        detail: err.name === "AbortError" ? "timeout" : err?.cause?.code || err?.message || "unknown",
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   },
 };
