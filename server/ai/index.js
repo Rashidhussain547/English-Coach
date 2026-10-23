@@ -4,7 +4,7 @@
 
 import { gemini } from "./providers/gemini.js";
 import { openai } from "./providers/openai.js";
-import { LIMITS, ConfigError, readAiConfig } from "./config.js";
+import { LIMITS, ConfigError, readAiConfig, readTuning } from "./config.js";
 import { AIError } from "./errors.js";
 
 const PROVIDERS = {
@@ -74,15 +74,34 @@ export async function generateReply({ system, messages, json = false, maxChars }
     throw new AIError("provider", "Aakhri message user ka hona chahiye.");
   }
 
-  return adapter.generate({
-    apiKey: config.apiKey,
-    model: config.model,
-    system,
-    messages: prepared,
-    maxOutputTokens: LIMITS.maxOutputTokens,
-    temperature: LIMITS.temperature,
-    timeoutMs: LIMITS.timeoutMs,
-    json,
-    baseUrl: (env.AI_BASE_URL || "").trim(),
-  });
+  const { timeoutMs, thinkingLevel } = readTuning(env);
+  const startedAt = Date.now();
+  try {
+    const result = await adapter.generate({
+      apiKey: config.apiKey,
+      model: config.model,
+      system,
+      messages: prepared,
+      maxOutputTokens: LIMITS.maxOutputTokens,
+      temperature: LIMITS.temperature,
+      timeoutMs,
+      json,
+      thinkingLevel,
+      baseUrl: (env.AI_BASE_URL || "").trim(),
+    });
+    // Vercel ke Runtime Logs mein timing dikhti hai (key kabhi log nahi hoti)
+    console.log(`[ai] ${adapter.name}/${config.model} ok in ${Date.now() - startedAt}ms`);
+    return result;
+  } catch (err) {
+    console.log(`[ai] ${adapter.name}/${config.model} failed (${err.code || err.name}) after ${Date.now() - startedAt}ms: ${err.message}`);
+    throw err;
+  }
+}
+
+// Provider tak connectivity check (agar adapter ping support karta hai)
+export async function probeProvider(env = process.env) {
+  const { config, adapter } = getActiveProvider(env);
+  if (!config.apiKey) throw new ConfigError(`${config.keyName} set nahi hai.`);
+  if (typeof adapter.ping !== "function") return { supported: false };
+  return { supported: true, ...(await adapter.ping({ apiKey: config.apiKey, timeoutMs: 10000 })) };
 }
