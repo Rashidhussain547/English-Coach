@@ -8,7 +8,7 @@ export function sendError(res, err) {
     return res.status(500).json({ ok: false, code: "config", detail: err.message });
   }
   if (err instanceof AIError) {
-    const status = err.code === "quota" ? 429 : err.code === "timeout" ? 504 : 502;
+    const status = err.code === "quota" ? 429 : err.code === "timeout" ? 504 : err.code === "busy" ? 503 : 502;
     return res.status(status).json({
       ok: false,
       code: err.code,
